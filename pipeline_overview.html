@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LSTM Anti-Jamming FPGA Pipeline</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=IBM+Plex+Mono:wght@300;400;600&display=swap');
+
+  :root {
+    --bg:        #050810;
+    --panel:     #0a0f1e;
+    --border:    #1a2744;
+    --accent:    #00d4ff;
+    --accent2:   #ff6b35;
+    --accent3:   #39ff14;
+    --dim:       #4a6080;
+    --text:      #c8d8f0;
+    --textdim:   #607090;
+    --warn:      #ffcc00;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    font-family: 'IBM Plex Mono', monospace;
+    color: var(--text);
+    min-height: 100vh;
+    padding: 32px 24px;
+    overflow-x: hidden;
+    position: relative;
+  }
+
+  /* Grid scanline overlay */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background:
+      repeating-linear-gradient(0deg,
+        transparent, transparent 39px,
+        rgba(0,212,255,0.03) 39px, rgba(0,212,255,0.03) 40px),
+      repeating-linear-gradient(90deg,
+        transparent, transparent 39px,
+        rgba(0,212,255,0.02) 39px, rgba(0,212,255,0.02) 40px);
+    pointer-events: none; z-index: 0;
+  }
+
+  .wrapper { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; }
+
+  /* ── Header ── */
+  .header {
+    text-align: center;
+    margin-bottom: 40px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+  }
+  .header h1 {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 22px;
+    font-weight: 900;
+    letter-spacing: 4px;
+    color: var(--accent);
+    text-shadow: 0 0 20px rgba(0,212,255,0.5);
+    margin-bottom: 6px;
+  }
+  .header p {
+    font-size: 11px;
+    color: var(--textdim);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+
+  /* ── Legend ── */
+  .legend {
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    margin-bottom: 36px;
+    flex-wrap: wrap;
+  }
+  .legend-item {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 10px; color: var(--textdim);
+    letter-spacing: 1px;
+  }
+  .legend-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+  }
+
+  /* ── Pipeline columns ── */
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    align-items: center;
+  }
+
+  /* ── Block ── */
+  .block {
+    width: 100%;
+    max-width: 780px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0;
+    position: relative;
+    overflow: hidden;
+    animation: fadeIn 0.4s ease both;
+  }
+  .block::before {
+    content: '';
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: 3px;
+  }
+  .block.clk::before   { background: var(--warn); }
+  .block.sniff::before { background: var(--accent); }
+  .block.calc::before  { background: var(--accent); }
+  .block.feat::before  { background: #a855f7; }
+  .block.lstm::before  { background: var(--accent2); }
+  .block.fsm::before   { background: var(--accent3); }
+  .block.ext::before   { background: var(--dim); }
+
+  .block-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 18px 10px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .block-num {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 10px; font-weight: 700;
+    color: var(--textdim);
+    letter-spacing: 2px;
+    min-width: 28px;
+  }
+  .block-title {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 13px; font-weight: 700;
+    letter-spacing: 1px;
+    flex: 1;
+  }
+  .block.clk   .block-title { color: var(--warn); }
+  .block.sniff .block-title { color: var(--accent); }
+  .block.calc  .block-title { color: var(--accent); }
+  .block.feat  .block-title { color: #a855f7; }
+  .block.lstm  .block-title { color: var(--accent2); }
+  .block.fsm   .block-title { color: var(--accent3); }
+  .block.ext   .block-title { color: var(--dim); }
+
+  .block-file {
+    font-size: 10px;
+    color: var(--textdim);
+    font-family: 'Share Tech Mono', monospace;
+    background: rgba(255,255,255,0.04);
+    padding: 2px 8px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+  }
+
+  .block-body {
+    padding: 14px 20px 14px 20px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px 24px;
+  }
+  .block-body.wide { grid-template-columns: 1fr; }
+  .block-body.three { grid-template-columns: 1fr 1fr 1fr; }
+
+  .section-label {
+    font-size: 9px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--textdim);
+    margin-bottom: 6px;
+  }
+
+  .detail-row {
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    margin-bottom: 4px;
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .detail-key {
+    color: var(--textdim);
+    min-width: 90px;
+    font-size: 10px;
+  }
+  .detail-val {
+    color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
+  }
+  .detail-val.hi { color: var(--accent); }
+  .detail-val.warn { color: var(--warn); }
+  .detail-val.green { color: var(--accent3); }
+  .detail-val.purple { color: #a855f7; }
+  .detail-val.orange { color: var(--accent2); }
+
+  /* Signal rows */
+  .signals {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .sig {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    border: 1px solid;
+  }
+  .sig.in  { color: #60a0c8; border-color: #1a3050; background: rgba(30,60,100,0.3); }
+  .sig.out { color: var(--accent3); border-color: #1a3a1a; background: rgba(20,50,20,0.3); }
+  .sig.clk { color: var(--warn); border-color: #3a3000; background: rgba(50,40,0,0.3); }
+  .sig.shared { color: #a855f7; border-color: #2a1a4a; background: rgba(40,20,70,0.3); }
+
+  /* Arrow between blocks */
+  .arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    margin: 0;
+    padding: 6px 0;
+  }
+  .arrow-line {
+    width: 2px;
+    height: 22px;
+    position: relative;
+  }
+  .arrow-line::after {
+    content: '';
+    position: absolute;
+    left: 50%; top: 0; bottom: 0;
+    transform: translateX(-50%);
+    width: 2px;
+  }
+  .arrow.data .arrow-line::after  { background: var(--accent3); box-shadow: 0 0 6px var(--accent3); }
+  .arrow.clock .arrow-line::after { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+  .arrow.ctrl .arrow-line::after  { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+
+  .arrow-head {
+    width: 0; height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+  }
+  .arrow.data  .arrow-head { border-top: 8px solid var(--accent3); }
+  .arrow.clock .arrow-head { border-top: 8px solid var(--warn); }
+  .arrow.ctrl  .arrow-head { border-top: 8px solid var(--accent2); }
+
+  .arrow-label {
+    font-size: 9px;
+    letter-spacing: 1px;
+    font-family: 'Share Tech Mono', monospace;
+    margin-top: 3px;
+    text-transform: uppercase;
+  }
+  .arrow.data  .arrow-label { color: var(--accent3); }
+  .arrow.clock .arrow-label { color: var(--warn); }
+  .arrow.ctrl  .arrow-label { color: var(--accent2); }
+
+  /* Horizontal clock bus */
+  .clock-bus {
+    width: 100%;
+    max-width: 780px;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin: 4px 0 8px;
+    position: relative;
+  }
+  .clock-bus-line {
+    flex: 1;
+    height: 2px;
+    background: linear-gradient(90deg, var(--warn), rgba(255,204,0,0.3));
+    box-shadow: 0 0 8px var(--warn);
+    position: relative;
+  }
+  .clock-bus-label {
+    font-size: 9px;
+    font-family: 'Share Tech Mono', monospace;
+    color: var(--warn);
+    letter-spacing: 2px;
+    padding: 0 10px;
+    white-space: nowrap;
+    text-shadow: 0 0 8px var(--warn);
+  }
+  .clock-tap {
+    position: absolute;
+    bottom: -6px;
+    width: 2px;
+    height: 12px;
+    background: var(--warn);
+  }
+
+  /* DSP badge */
+  .badge {
+    font-size: 9px;
+    font-family: 'Orbitron', monospace;
+    padding: 2px 7px;
+    border-radius: 10px;
+    letter-spacing: 1px;
+    font-weight: 700;
+  }
+  .badge.dsp  { background: rgba(255,107,53,0.2); color: var(--accent2); border: 1px solid var(--accent2); }
+  .badge.bram { background: rgba(0,212,255,0.1); color: var(--accent); border: 1px solid var(--accent); }
+  .badge.lut  { background: rgba(168,85,247,0.15); color: #a855f7; border: 1px solid #a855f7; }
+
+  /* MAC parallel viz */
+  .mac-viz {
+    display: flex;
+    gap: 4px;
+    align-items: flex-end;
+    margin-top: 8px;
+    flex-wrap: wrap;
+  }
+  .mac-bar {
+    width: 14px;
+    border-radius: 2px 2px 0 0;
+    position: relative;
+  }
+  .mac-bar.l1 { background: rgba(255,107,53,0.7); height: 28px; }
+  .mac-bar.l2 { background: rgba(255,107,53,0.4); height: 20px; }
+  .mac-bar-label {
+    position: absolute; bottom: -14px; left: 50%;
+    transform: translateX(-50%);
+    font-size: 7px; color: var(--textdim); white-space: nowrap;
+  }
+
+  /* Output section */
+  .output-row {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    padding: 8px 14px;
+    border-radius: 4px;
+    margin-bottom: 6px;
+    font-size: 11px;
+  }
+  .output-row.switch { background: rgba(57,255,20,0.07); border: 1px solid rgba(57,255,20,0.2); }
+  .output-row.prob   { background: rgba(0,212,255,0.06); border: 1px solid rgba(0,212,255,0.15); }
+
+  .output-name { font-family: 'Share Tech Mono', monospace; min-width: 150px; }
+  .output-desc { color: var(--textdim); font-size: 10px; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Divider */
+  .section-div {
+    display: flex; align-items: center; gap: 12px;
+    width: 100%; max-width: 780px;
+    margin: 10px 0 6px;
+  }
+  .section-div span {
+    font-size: 9px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--textdim); white-space: nowrap;
+  }
+  .section-div::before, .section-div::after {
+    content: ''; flex: 1; height: 1px; background: var(--border);
+  }
+
+  /* Timing footer */
+  .timing-bar {
+    width: 100%; max-width: 780px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin-top: 16px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+  .timing-cell { text-align: center; }
+  .timing-num {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 18px; font-weight: 900;
+    display: block; margin-bottom: 4px;
+  }
+  .timing-lbl { font-size: 9px; letter-spacing: 1px; color: var(--textdim); text-transform: uppercase; }
+  .timing-cell:nth-child(1) .timing-num { color: var(--warn); }
+  .timing-cell:nth-child(2) .timing-num { color: var(--accent); }
+  .timing-cell:nth-child(3) .timing-num { color: var(--accent2); }
+  .timing-cell:nth-child(4) .timing-num { color: var(--accent3); }
+</style>
+</head>
+<body>
+<div class="wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <h1>LSTM Anti-Jamming · FPGA Pipeline</h1>
+    <p>Xilinx ZedBoard XC7Z020 · 100 MHz · Q4.12 Fixed-Point · Verilog RTL</p>
+  </div>
+
+  <!-- Legend -->
+  <div class="legend">
+    <div class="legend-item">
+      <div class="legend-dot" style="background:#ffcc00"></div>CLOCK DOMAIN
+    </div>
+    <div class="legend-item">
+      <div class="legend-dot" style="background:#00d4ff"></div>PARSE / COMPUTE
+    </div>
+    <div class="legend-item">
+      <div class="legend-dot" style="background:#a855f7"></div>FEATURE ENG.
+    </div>
+    <div class="legend-item">
+      <div class="legend-dot" style="background:#ff6b35"></div>ML INFERENCE
+    </div>
+    <div class="legend-item">
+      <div class="legend-dot" style="background:#39ff14"></div>DECISION OUTPUT
+    </div>
+  </div>
+
+  <div class="pipeline">
+
+    <!-- EXTERNAL: WiFi Radio -->
+    <div class="block ext" style="animation-delay:0s">
+      <div class="block-header">
+        <span class="block-num">EXT</span>
+        <span class="block-title">WiFi Radio / PHY</span>
+        <span class="block-file">AXI Stream (8-bit TDATA)</span>
+      </div>
+      <div class="block-body">
+        <div>
+          <div class="section-label">Packet stream</div>
+          <div class="detail-row">
+            <span class="detail-key">Interface</span>
+            <span class="detail-val">AXI4-Stream · 8-bit/cycle</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-key">Drone Tx</span>
+            <span class="detail-val hi">UDP port 8888 → GCS ping</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-key">Drone Rx</span>
+            <span class="detail-val hi">UDP port 8889 ← GCS echo</span>
+          </div>
+        </div>
+        <div>
+          <div class="section-label">PHY measurements</div>
+          <div class="detail-row">
+            <span class="detail-key">rssi_raw_dbm</span>
+            <span class="detail-val">signed 8-bit · -100..-40</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-key">noise_raw_dbm</span>
+            <span class="detail-val">signed 8-bit · -100..-50</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-key">Note</span>
+            <span class="detail-val warn">Drone CPU unmodified</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow data">
+      <div class="arrow-line"></div>
+      <div class="arrow-head"></div>
+      <div class="arrow-label">AXI stream + PHY measurements</div>
+    </div>
+
+    <!-- hw_clock + packet_sniffer side by side logic -->
+    <!-- hw_clock -->
+    <div class="block clk" style="animation-delay:0.08s">
+      <div class="block-header">
+        <span class="block-num">01</span>
+        <span class="block-title">Hardware Clock</span>
+        <span class="block-file">hw_clock.v</span>
+      </div>
+      <div class="block-body">
+        <div>
+          <div class="section-label">Specification</div>
+          <div class="detail-row"><span class="detail-key">Width</span><span class="detail-val warn">64-bit counter</span></div>
+          <div class="detail-row"><span class="detail-key">Resolution</span><span class="detail-val">10 ns / tick @ 100 MHz</span></div>
+          <div class="detail-row"><span class="detail-key">Wraparound</span><span class="detail-val">~5,849 years</span></div>
+        </div>
+        <div>
+          <div class="section-label">Used by</div>
+          <div class="signals">
+            <span class="sig shared">packet_sniffer</span>
+            <span class="sig shared">rtt_calculator</span>
+          </div>
+          <div class="detail-row" style="margin-top:8px">
+            <span class="detail-key">Output</span>
+            <span class="detail-val warn">hw_timestamp[63:0]</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow data">
+      <div class="arrow-line"></div>
+      <div class="arrow-head"></div>
+      <div class="arrow-label">hw_timestamp[63:0] broadcast to all modules</div>
+    </div>
+
+    <!-- Packet Sniffer -->
+    <div class="block sniff" style="animation-delay:0.16s">
+      <div class="block-header">
+        <span class="block-num">02</span>
+        <span class="block-title">Packet Sniffer FSM</span>
+        <span class="block-file">packet_sniffer.v</span>
+      </div>
+      <div class="block-body three">
+        <div>
+          <div class="section-label">FSM States</div>
+          <div class="detail-row"><span class="detail-val">S_IDLE → S_ETH_HDR</span></div>
+          <div class="detail-row"><span class="detail-val">→ S_IP_HDR (14 bytes)</span></div>
+          <div class="detail-row"><span class="detail-val">→ S_UDP_DP_HI/LO</span></div>
+          <div class="detail-row"><span class="detail-val">→ S_SEQ_HI/LO → done</span></div>
+        </div>
+        <div>
+          <div class="section-label">Header Parsing</div>
+          <div class="detail-row"><span class="detail-key">Byte 12-13</span><span class="detail-val">EtherType = 0x0800</span></div>
+          <div class="detail-row"><span class="detail-key">Byte 23</span><span class="detail-val">Protocol = 0x11 (UDP)</span></div>
+          <div class="detail-row"><span class="detail-key">Byte 36-37</span><span class="detail-val hi">dst_port → TX/RX</span></div>
+          <div class="detail-row"><span class="detail-key">Byte 42-43</span><span class="detail-val hi">seq_num extracted</span></div>
+        </div>
+        <div>
+          <div class="section-label">Outputs</div>
+          <div class="signals">
+            <span class="sig out">tx_seq_valid</span>
+            <span class="sig out">tx_seq_num[15:0]</span>
+            <span class="sig out">tx_timestamp[63:0]</span>
+            <span class="sig out">rx_seq_valid</span>
+            <span class="sig out">rx_seq_num[15:0]</span>
+            <span class="sig out">rx_timestamp[63:0]</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow data">
+      <div class="arrow-line"></div>
+      <div class="arrow-head"></div>
+      <div class="arrow-label">seq_num + timestamps (tx/rx) + raw PHY values</div>
+    </div>
+
+    <!-- RTT Calculator -->
+    <div class="block calc" style="animation-delay:0.24s">
+      <div class="block-header">
+        <span class="block-num">03</span>
+        <span class="block-title">RTT &amp; PHY Calculator</span>
+        <span class="block-file">rtt_calculator.v</span>
+        <span class="badge bram">BRAM LUT</span>
+      </div>
+      <div class="block-body three">
+        <div>
+          <div class="section-label">BRAM Timestamp LUT</div>
+          <div class="detail-row"><span class="detail-key">Depth</span><span class="detail-val">65,536 entries</span></div>
+          <div class="detail-row"><span class="detail-key">Width</span><span class="detail-val">64 bits (timestamp)</span></div>
+          <div class="detail-row"><span class="detail-key">Index</span><span class="detail-val hi">seq_num (16-bit)</span></div>
+          <div class="detail-row"><span class="detail-key">Write</span><span class="detail-val">on tx_seq_valid</span></div>
+          <div class="detail-row"><span class="detail-key">Read</span><span class="detail-val">on rx_seq_valid</span></div>
+        </div>
+        <div>
+          <div class="section-label">4-Stage Pipeline</div>
+          <div class="detail-row"><span class="detail-val">①  Register rx info</span></div>
+          <div class="detail-row"><span class="detail-val">②  BRAM read (1 cycle)</span></div>
+          <div class="detail-row"><span class="detail-val">③  rtt = rx_ts - lut[seq]</span></div>
+          <div class="detail-row"><span class="detail-val">④  Scale → Q4.12</span></div>
+        </div>
+        <div>
+          <div class="section-label">Q4.12 Normalisation</div>
+          <div class="detail-row"><span class="detail-key">rtt_q412</span><span class="detail-val green">ticks×4096÷5M</span></div>
+          <div class="detail-row"><span class="detail-key">rssi_q412</span><span class="detail-val green">(dbm+100)×4096÷60</span></div>
+          <div class="detail-row"><span class="detail-key">noise_q412</span><span class="detail-val green">(dbm+100)×4096÷50</span></div>
+          <div class="detail-row" style="margin-top:6px">
+            <span class="detail-key">Latency</span><span class="detail-val warn">4 clock cycles</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow data">
+      <div class="arrow-line"></div>
+      <div class="arrow-head"></div>
+      <div class="arrow-label">rtt_q412, rssi_q412, noise_floor_q412 (all Q4.12)</div>
+    </div>
+
+    <!-- Feature Engineering -->
+    <div class="block feat" style="animation-delay:0.32s">
+      <div class="block-header">
+        <span class="block-num">04</span>
+        <span class="block-title">Feature Engineering</span>
+        <span class="block-file">feature_engineering.v</span>
+      </div>
+      <div class="block-body">
+        <div>
+          <div class="section-label">Derived Features (computed in HW)</div>
+          <div class="detail-row">
+            <span class="detail-key" style="min-width:130px">delta_rtt</span>
+            <span class="detail-val purple">rtt[t] − rtt[t−1] · centred at 0.5</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-key" style="min-width:130px">rolling_std</span>
+            <span class="detail-val purple">std(rtt[t−4..t]) · 5-sample window</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-key" style="min-width:130px">rssi_rolling_std</span>
+            <span class="detail-val purple">std(rssi[t−4..t]) · 5-sample window</span>
+          </div>
+          <div class="detail-row" style="margin-top:6px">
+            <span class="detail-key" style="min-width:130px">Sqrt method</span>
+            <span class="detail-val">Newton-Raphson · 8 iterations</span>
+          </div>
+        </div>
+        <div>
+          <div class="section-label">Packed output bus [95:0]</div>
+          <div class="signals" style="flex-direction:column; gap:3px;">
+            <span class="sig out">[15:0]  rtt_ms          (passthrough)</span>
+            <span class="sig out">[31:16] delta_rtt        (computed)</span>
+            <span class="sig out">[47:32] rolling_std      (computed)</span>
+            <span class="sig out">[63:48] rssi_dbm         (passthrough)</span>
+            <span class="sig out">[79:64] rssi_rolling_std (computed)</span>
+            <span class="sig out">[95:80] noise_floor_dbm  (passthrough)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow data">
+      <div class="arrow-line"></div>
+      <div class="arrow-head"></div>
+      <div class="arrow-label">feature_in[95:0] — 6 × 16-bit Q4.12 packed</div>
+    </div>
+
+    <!-- LSTM Engine -->
+    <div class="block lstm" style="animation-delay:0.40s">
+      <div class="block-header">
+        <span class="block-num">05</span>
+        <span class="block-title">LSTM Inference Engine</span>
+        <span class="block-file">lstm_inference_top.v · lstm_cell_parallel.v · mac_unit.v</span>
+        <span class="badge dsp">86 DSP48E1</span>
+        <span class="badge bram">BRAM Weights</span>
+      </div>
+      <div class="block-body three">
+        <div>
+          <div class="section-label">Input Buffer</div>
+          <div class="detail-row"><span class="detail-key">Size</span><span class="detail-val">20 × 6 × 16-bit</span></div>
+          <div class="detail-row"><span class="detail-key">Type</span><span class="detail-val">Shift register</span></div>
+          <div class="detail-row"><span class="detail-key">Full at</span><span class="detail-val orange">20 samples (2s)</span></div>
+          <div style="margin-top:12px">
+          <div class="section-label">Parallel MAC Units</div>
+          <div class="mac-viz">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
+              <span style="font-size:8px;color:var(--textdim)">L1_ih</span>
+              <div style="display:flex;gap:2px;">
+                <div class="mac-bar l1"></div><div class="mac-bar l1"></div>
+                <div class="mac-bar l1"></div><div class="mac-bar l1"></div>
+                <div class="mac-bar l1"></div><div class="mac-bar l1"></div>
+              </div>
+              <span style="font-size:8px;color:var(--accent2)">6 DSPs</span>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
+              <span style="font-size:8px;color:var(--textdim)">L1_hh</span>
+              <div style="display:flex;gap:1px;flex-wrap:wrap;max-width:50px">
+                <div class="mac-bar l1" style="height:24px;width:4px"></div><div class="mac-bar l1" style="height:24px;width:4px"></div><div class="mac-bar l1" style="height:24px;width:4px"></div><div class="mac-bar l1" style="height:24px;width:4px"></div><div class="mac-bar l1" style="height:24px;width:4px"></div><div class="mac-bar l1" style="height:24px;width:4px"></div><div class="mac-bar l1" style="height:24px;width:4px"></div><div class="mac-bar l1" style="height:24px;width:4px"></div>
+              </div>
+              <span style="font-size:8px;color:var(--accent2)">32 DSPs</span>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
+              <span style="font-size:8px;color:var(--textdim)">L2</span>
+              <div style="display:flex;gap:1px;flex-wrap:wrap;max-width:40px">
+                <div class="mac-bar l2" style="height:18px;width:4px"></div><div class="mac-bar l2" style="height:18px;width:4px"></div><div class="mac-bar l2" style="height:18px;width:4px"></div><div class="mac-bar l2" style="height:18px;width:4px"></div><div class="mac-bar l2" style="height:18px;width:4px"></div><div class="mac-bar l2" style="height:18px;width:4px"></div><div class="mac-bar l2" style="height:18px;width:4px"></div><div class="mac-bar l2" style="height:18px;width:4px"></div>
+              </div>
+              <span style="font-size:8px;color:var(--accent2)">48 DSPs</span>
+            </div>
+          </div>
+          </div>
+        </div>
+        <div>
+          <div class="section-label">LSTM Cell Parallel</div>
+          <div class="detail-row"><span class="detail-key">Layer 1</span><span class="detail-val orange">6 → 32 hidden</span></div>
+          <div class="detail-row"><span class="detail-key">Layer 2</span><span class="detail-val orange">32 → 16 hidden</span></div>
+          <div class="detail-row"><span class="detail-key">Timesteps</span><span class="detail-val">20 per inference</span></div>
+          <div class="detail-row"><span class="detail-key">Gates</span><span class="detail-val">i, f, g, o · Q4.12</span></div>
+          <div class="detail-row"><span class="detail-key">Activations</span><span class="detail-val">Sigmoid + Tanh LUTs</span></div>
+          <div class="detail-row"><span class="detail-key">LUT entries</span><span class="detail-val">256 × 16-bit each</span></div>
+          <div style="margin-top:12px">
+          <div class="section-label">FC Layer</div>
+          <div class="detail-row"><span class="detail-key">FC</span><span class="detail-val orange">16 → 1 + sigmoid</span></div>
+          <div class="detail-row"><span class="detail-key">Output</span><span class="detail-val orange">P(jammed) Q4.12</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="section-label">Weight ROMs (hex files)</div>
+          <div class="signals" style="flex-direction:column;gap:3px;">
+            <span class="sig in">lstm1_w_ih.hex  768 vals</span>
+            <span class="sig in">lstm1_w_hh.hex 4096 vals</span>
+            <span class="sig in">lstm1_bias.hex  128 vals</span>
+            <span class="sig in">lstm2_w_ih.hex 2048 vals</span>
+            <span class="sig in">lstm2_w_hh.hex 1024 vals</span>
+            <span class="sig in">lstm2_bias.hex   64 vals</span>
+            <span class="sig in">fc_weight.hex    16 vals</span>
+            <span class="sig in">fc_bias.hex       1 val</span>
+            <span class="sig in">sigmoid_lut.hex 256 vals</span>
+            <span class="sig in">tanh_lut.hex    256 vals</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow ctrl">
+      <div class="arrow-line"></div>
+      <div class="arrow-head"></div>
+      <div class="arrow-label">prob_jammed[15:0] Q4.12 · inference_done pulse</div>
+    </div>
+
+    <!-- Evasion FSM -->
+    <div class="block fsm" style="animation-delay:0.48s">
+      <div class="block-header">
+        <span class="block-num">06</span>
+        <span class="block-title">Proactive Evasion FSM</span>
+        <span class="block-file">lstm_inference_top.v (integrated)</span>
+      </div>
+      <div class="block-body">
+        <div>
+          <div class="section-label">Decision Logic</div>
+          <div class="detail-row"><span class="detail-key">Threshold</span><span class="detail-val green">0x0666 = 0.40 in Q4.12</span></div>
+          <div class="detail-row"><span class="detail-key">Raw switch</span><span class="detail-val">P(jammed) &gt; 0.40</span></div>
+          <div class="detail-row"><span class="detail-key">Roll window</span><span class="detail-val green">3 consecutive hits</span></div>
+          <div class="detail-row"><span class="detail-key">FAR effect</span><span class="detail-val">40% → &lt;10%</span></div>
+        </div>
+        <div>
+          <div class="section-label">Output Signals</div>
+          <div class="output-row switch">
+            <span class="output-name" style="color:var(--accent3)">filtered_switch</span>
+            <span class="output-desc">3-consecutive · safe to act on</span>
+          </div>
+          <div class="output-row prob">
+            <span class="output-name" style="color:var(--accent)">channel_switch</span>
+            <span class="output-desc">raw single-inference decision</span>
+          </div>
+          <div class="output-row prob">
+            <span class="output-name" style="color:var(--accent)">prob_jammed[15:0]</span>
+            <span class="output-desc">Q4.12 probability for debug</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow ctrl">
+      <div class="arrow-line"></div>
+      <div class="arrow-head"></div>
+      <div class="arrow-label">filtered_switch → RF transceiver hop command</div>
+    </div>
+
+    <!-- External output -->
+    <div class="block ext" style="animation-delay:0.56s">
+      <div class="block-header">
+        <span class="block-num">OUT</span>
+        <span class="block-title">RF Transceiver / Wi-Fi PHY</span>
+        <span class="block-file">Frequency Hop Command</span>
+      </div>
+      <div class="block-body wide">
+        <div style="display:flex;gap:24px;flex-wrap:wrap">
+          <div>
+            <div class="section-label">Action on filtered_switch=1</div>
+            <div class="detail-row"><span class="detail-val green">Trigger frequency hop to clear channel</span></div>
+            <div class="detail-row"><span class="detail-val">Predicted 500ms ahead of jamming onset</span></div>
+          </div>
+          <div>
+            <div class="section-label">Fallback (channel_switch only)</div>
+            <div class="detail-row"><span class="detail-val warn">Single-inference alert — log only</span></div>
+            <div class="detail-row"><span class="detail-val">Do not hop until rolling window confirms</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Timing Summary -->
+    <div class="timing-bar">
+      <div class="timing-cell">
+        <span class="timing-num">100 MHz</span>
+        <span class="timing-lbl">System Clock</span>
+      </div>
+      <div class="timing-cell">
+        <span class="timing-num">389 µs</span>
+        <span class="timing-lbl">Inference Latency</span>
+      </div>
+      <div class="timing-cell">
+        <span class="timing-num">86 / 220</span>
+        <span class="timing-lbl">DSP48E1 Used</span>
+      </div>
+      <div class="timing-cell">
+        <span class="timing-num">95.3%</span>
+        <span class="timing-lbl">Detection Rate</span>
+      </div>
+    </div>
+
+  </div><!-- /pipeline -->
+</div><!-- /wrapper -->
+</body>
+</html>
